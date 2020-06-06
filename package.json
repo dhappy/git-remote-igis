@@ -1,45 +1,31 @@
 {
-  "name": "git-remote-igis",
-  "version": "0.3.13",
+  "name": "git-remote-ipfs",
+  "version": "0.3.20",
   "description": "Git remote that interacts with the IPFS ecosystem",
-  "bin": "git-remote-igis",
+  "bin": "git-remote-ipfs",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dhappy/git-remote-igis.git"
+    "url": "git+https://github.com/dhappy/git-remote-ipfs.git"
   },
   "keywords": [
     "IPFS",
-    "IGiS",
-    "IPNS",
     "git"
   ],
   "author": "Will Holcomb <dys@dhappy.org>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/dhappy/git-remote-igis/issues"
+    "url": "https://github.com/dhappy/git-remote-ipfs/issues"
   },
-  "homepage": "https://github.com/dhappy/git-remote-igis#readme",
+  "homepage": "https://github.com/dhappy/git-remote-ipfs#readme",
   "dependencies": {
-    "@iota/mam.js": "^1.0.0-beta.6",
-    "@metamask/inpage-provider": "^5.0.0",
-    "@textile/threads-database": "^0.1.5",
-    "iota.crypto.js": "^0.4.2",
-    "ipfs": "^0.43.1",
     "ipfs-http-client": "^44.1.0",
     "it-all": "^1.0.2",
     "leveldown": "^5.6.0",
     "levelup": "^4.4.0",
     "node-lmdb": "^0.8.0",
-    "node-metamask": "^1.1.2",
-    "nodegit": "^0.26.5",
-    "open": "^7.0.3",
-    "orbit-db": "file:../orbit-db",
-    "post-message-stream": "^3.0.0",
-    "textile": "0.0.1",
-    "tmp": "^0.2.1",
-    "web3": "^1.2.7"
+    "nodegit": "^0.26.5"
   }
 }

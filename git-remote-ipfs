@@ -13,29 +13,17 @@ if(process.argv.length < 2) {
 
 const readline = require('readline')
 const Git = require('nodegit')
-//const IPFS = require('ipfs')
 const IPFSProxy = require('ipfs-http-client')
 const all = require('it-all')
 const toBuffer = require('it-to-buffer')
-const OrbitDB = require('orbit-db')
 const levelup = require('levelup')
 const leveldown = require('leveldown')
 const { Console } = require('console');
 const fs = require('fs')
 const { v1:uuidv1 } = require('uuid');
-const crypto = require('crypto');
-const { composeAPI } = require('@iota/core')
-const { asciiToTrytes, trytesToAscii } = require('@iota/converter')
-const { channelRoot, createChannel, createMessage, parseMessage, mamAttach, mamFetch, mamFetchAll } = require('@iota/mam.js');
-
-const depth = 3 // milestones back to start the random walk
-// const IOTA = composeAPI({ provider: 'https://altnodes.devnet.iota.org:443' })
-// const minWeightMagnitude = 9 /* devnet */
-const IOTA = composeAPI({ provider: 'https://nodes.thetangle.org:443' })
-const minWeightMagnitude = 14 /* mainnet */
 
 const EMPTY_REPO_CID = 'QmUNLLsPACCz1vLxQVkXqqLX5R1X345qqfHbsf67hvA3Nn'
-const DEBUG = !!process.env.IGIS_DEBUG
+const DEBUG = !!process.env.DEBUG
 
 const console = new Console(process.stderr)
 
@@ -49,32 +37,13 @@ if(!process.env.GIT_DIR) {
   process.exit(-9)
 }
 
-const genSeed = (length = 81) => {
-  const alphabet = '9ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-  let seed = ''
-  do {
-    const bytes = crypto.randomBytes(1)
-    if(bytes[0] < 243) { // 243 % 27 == 0
-      seed += alphabet[bytes[0] % alphabet.length]
-    }
-  } while(seed.length < length)
-  return seed
-}
-
 ;(async () => {
   const dataDir = `${process.env.GIT_DIR}/remote-igis`
+  fs.mkdirSync(dataDir, { recursive: true })
   const cacheDir = `${dataDir}/cache`
   const repo = await Git.Repository.open(process.env.GIT_DIR)
   const odb = await repo.odb()
   const ipfs = IPFSProxy()
-  fs.mkdirSync(dataDir, { recursive: true })
-  const configFile = `${dataDir}/config.json`
-  let newMAMChannel = false // announce to IOTA address this repo
-  if(!fs.existsSync(configFile)) {
-    fs.writeFileSync(configFile, `{ "seed": "${genSeed()}" }`)
-    newMAMChannel = true
-  }
-  const config = require(`${configFile[0] !== '/' ? process.cwd() : ''}/${configFile}`)
   const cacheDB = levelup(leveldown(cacheDir))  
   const cache = {
     get: async (key) => {
@@ -87,6 +56,20 @@ const genSeed = (length = 81) => {
     put: cacheDB.put.bind(cacheDB),
   }
 
+  const url = process.argv[3]
+  let vfs = {}
+  if(url.startsWith('ipfs://')) {
+    const name = url.replace(/^ipfs:\/\//, '')
+    if(name) {
+      vfs.name = name
+    }
+  } else if(url.length > 0) {
+    vfs = (await ipfs.dag.get(`${url}/.git/`)).value
+    DEBUG && console.debug('Continuing:', url)
+    console.debug(vfs)
+  }
+
+
   const oidInODB = async (oid) => {
     try {
       return await odb.existsPrefix(oid, oid.length)
@@ -95,7 +78,7 @@ const genSeed = (length = 81) => {
     }
   }
 
-  const treeFor = async (root, modesCID) => {
+  const fetchTree = async (root, modesCID) => {
     DEBUG && console.debug('treeFor()', root.toString())
     const list = await all(ipfs.ls(root.toString()))
     const tb = await Git.Treebuilder.create(repo, null)
@@ -105,7 +88,7 @@ const genSeed = (length = 81) => {
       if(type === 'dir') {
         let oid = await cache.get(cid)
         if(!oid || !(await oidInODB(oid.toString()))) {
-          oid = await treeFor(cid, modes[name])
+          oid = await fetchTree(cid, modes[name])
           await cache.put(cid, oid)
         }
         tb.insert(name, oid.toString(), Git.TreeEntry.FILEMODE.TREE)
@@ -124,13 +107,13 @@ const genSeed = (length = 81) => {
     return tb.write()
   }
 
-  const tagFor = async (cid) => {
+  const fetchTag = async (cid) => {
     DEBUG && console.debug('tagFor()', cid)
     const root = (await ipfs.dag.get(cid)).value
     const {
       name, type, commit: commitCID, message, taggerSig
     } = root
-    const commit = await commitFor(commitCID)
+    const commit = await fetchCommit(commitCID)
     if(type === 'annotated') {
       return await repo.createTag(commit.oid, name, message)
     } else {
@@ -138,17 +121,17 @@ const genSeed = (length = 81) => {
     }
   }
 
-  const commitFor = async (cid) => {
+  const fetchCommit = async (cid) => {
     DEBUG && console.debug('commitFor()', cid)
     const root = (await ipfs.dag.get(cid)).value
     const {
       authorSig, committerSig, encoding, message, oid,
       tree:treeCID, modes, parents:parentCIDs, signature,
     } = root
-    const treeOID = await treeFor(treeCID, modes)
+    const treeOID = await fetchTree(treeCID, modes)
     const tree = await Git.Tree.lookup(repo, treeOID)
     const parents = await Promise.all(parentCIDs.map(
-      async c => await Git.Commit.lookup(repo, await commitFor(c))
+      async c => await Git.Commit.lookup(repo, await fetchCommit(c))
     ))
     const parent_count = parents.length
     const author = Git.Signature.create(authorSig.name, authorSig.email, authorSig.time, authorSig.offset)
@@ -173,7 +156,7 @@ const genSeed = (length = 81) => {
     return commit
   }
 
-  const addTree = async (tree, base = EMPTY_REPO_CID) => {
+  const pushTree = async (tree, base = EMPTY_REPO_CID) => {
     DEBUG && console.debug('addTree()', tree.id().toString())
     var modes = {}
     for(const e of (await tree.entries())) {
@@ -184,7 +167,7 @@ const genSeed = (length = 81) => {
         DEBUG && console.debug('addTree() recursing', childModes)
         if(!cid || !childModes) {
           DEBUG && console.debug('Cache Miss', e.oid().toString())
-          ;[cid, childModes] = await addTree(await e.getTree())
+          ;[cid, childModes] = await pushTree(await e.getTree())
           await cache.put(e.oid().toString(), cid)
           await cache.put(`modes:${e.oid().toString()}`, childModes.toString())
           DEBUG && console.debug('CID', cid, childModes)
@@ -209,7 +192,7 @@ const genSeed = (length = 81) => {
       base = await ipfs.object.patch.addLink(
         base, { name: e.name(), cid: cid }, { pin: true }
       )
-  }
+    }
 
     return [base, await ipfs.dag.put(modes, { pin: true })]
   }
@@ -218,7 +201,7 @@ const genSeed = (length = 81) => {
     resolvers: {},
     convert: (oid) => {
       if(!oidMgr.resolvers[oid]) { // new
-        addCommit(oid)
+        pushCommit(oid)
         oidMgr.resolvers[oid] = []
       }
       const promise = new Promise((res, rej) => {
@@ -235,7 +218,7 @@ const genSeed = (length = 81) => {
     }
   }
 
-  const addCommit = async (oid) => {
+  const pushCommit = async (oid) => {
     DEBUG && console.debug('addCommit()', oid.toString())
     process.stderr.write(`mit:${oid}: `)
     let cid = await cache.get(oid)
@@ -244,7 +227,7 @@ const genSeed = (length = 81) => {
       process.stderr.write(`cache:${cid}\n`)
     } else {
       const head = await Git.Commit.lookup(repo, oid)
-      const [tree, modes] = await addTree(await head.getTree())
+      const [tree, modes] = await pushTree(await head.getTree())
       process.stderr.write(`tree:${tree}\n`) // \r\x1b[A
       const parents = await Promise.all((await head.parents()).map(p => oidMgr.convert(p)))
       const obj = {
@@ -263,19 +246,19 @@ const genSeed = (length = 81) => {
     return cid
   }
 
-  const addTag = async (oid, name) => {
+  const pushTag = async (oid, name) => {
     let obj
     try {
       process.stderr.write(`tag:${oid}: `)
       const tag = await Git.Tag.lookup(repo, oid)
-      const commit = await addCommit(tag.targetId())
+      const commit = await pushCommit(tag.targetId())
 
       obj = {
         commit: commit, taggerSig: objForSig(tag.tagger()),
         name: name, message: tag.message(), type: 'annotated',
       }
     } catch(err) { // Lightweight tags return a commit instead of a tag
-      const commit = await addCommit(oid)
+      const commit = await pushCommit(oid)
       obj = {
         name: name, commit: commit, type: 'lightweight',
       }
@@ -287,7 +270,6 @@ const genSeed = (length = 81) => {
     await Promise.all(Object.entries(root).map(async ([name, obj]) => {
       if(obj instanceof IPFSProxy.CID || obj.codec == 'dag-cbor') {
         const commit = (await ipfs.dag.get(obj)).value
-
         DEBUG && console.debug(`> ${commit.oid} ${path}/${name}`)
         process.stdout.write(`${commit.oid} ${path}/${name}\n`)
       } else {
@@ -301,9 +283,9 @@ const genSeed = (length = 81) => {
       DEBUG && console.debug('doFetch()', `${process.argv[3]}/.git/${ref}`)
       try {
         if(ref.startsWith('refs/tags')) {
-          const tag = await tagFor(`${process.argv[3]}/.git/${ref}`)
+          const tag = await fetchTag(`${process.argv[3]}/.git/${ref}`)
         } else {
-          const commit = await commitFor(`${process.argv[3]}/.git/${ref}`)
+          const commit = await fetchCommit(`${process.argv[3]}/.git/${ref}`)
           await repo.createBranch(ref.replace(/^refs\/heads\//, ''), commit)
           console.debug(`Created Branch: ${ref.replace(/^refs\/heads\//, '')}`)
         }
@@ -312,69 +294,8 @@ const genSeed = (length = 81) => {
     await repo.setHead((await ipfs.dag.get(`${process.argv[3]}/.git/HEAD`)).value)
   }
 
-  // Walks forward on the MAM tree until the next root hasn't been used yet
-  // Returns the .git CBOR-DAG object representing the repository's configuration
-  // This fails on clone because a new repo is set up with a new MAM seed with
-  // no history. In that situation we will have to rely on the clone format being
-  // 'git clone igis::QmHASH'. In this situation git will strip the igis:: from
-  // the second parameter and pass it as the third parameter.
-  const findRepoHead = async () => {
-    const seed = config.seed
-    const mode = 'public'
-    let cid, vfs = {}
-
-    if(process.argv[3]) {
-      vfs = (await ipfs.dag.get(`${process.argv[3]}/.git/`)).value
-    }
-
-    channelState = vfs && vfs.channel && {...vfs.channel, seed}
-    
-    if(!channelState) {
-      channelState = createChannel(seed, 2, mode)
-      channelState.nextRoot = channelRoot(channelState)
-    }
-
-    const maxSteps = 5
-    let last = {...channelState}
-    let steps
-    do {
-      console.debug('Walking the MAM tree to find the root', last.nextRoot)
-      steps = await mamFetchAll(IOTA, last.nextRoot, mode, undefined, maxSteps)
-      steps.forEach((s) => console.debug(s.nextRoot, trytesToAscii(s.message)))
-      if(steps.length > 0 || !last.message) {
-        last = steps.slice(-1)[0]
-      }
-    } while(steps.length === maxSteps)
-
-    if(last) cid = trytesToAscii(last.message)
-
-    try {
-      if(cid && cid !== process.argv[3]) {
-        console.debug('Loading From', cid)
-        vfs = (await ipfs.dag.get(`${cid}/.git/`)).value
-        channelState = {...vfs.channel, seed}
-        channelState.start++
-        channelState.nextRoot = last.nextRoot
-      }
-    } catch(err) { console.error(err) }
-
-    vfs.channel = channelState
-
-    return vfs
-  }
-
-  const vfs = await findRepoHead()
-
   const doPush = async (url) => {
-    const tag = '99IGIS99REPOSITORY99'
     let base
-
-    if(url.startsWith('igis://')) {
-      const name = url.replace(/^igis:\/\//, '')
-      if(name) {
-        vfs.name = name
-      }
-    }
 
     // Unset so it will be set to the commit that was just pushed
     vfs.HEAD = undefined
@@ -389,8 +310,8 @@ const genSeed = (length = 81) => {
         const isTag = dst.split('/')[1] === 'tags'
         DEBUG && console.debug('Starting w/ OID', oid.toString(), `(${src})`)
         const cid = await (isTag
-          ? addTag(oid, dst.split('/').slice(2).join('/'))
-          : addCommit(oid)
+          ? pushTag(oid, dst.split('/').slice(2).join('/'))
+          : pushCommit(oid)
         )
 
         const parts = dst.split('/')
@@ -411,13 +332,6 @@ const genSeed = (length = 81) => {
 
     vfs.uuid = vfs.uuid || uuidv1()
 
-    if(!vfs.announceAddr) { // Address repos send to when forked to find each other
-      vfs.announceAddr = genSeed()
-      newMAMChannel = true
-    }
-
-    const channelState = vfs.channel
-    delete vfs.channel
     const channelless = await ipfs.object.patch.addLink(
       base,
       { name: '.git', cid: await ipfs.dag.put(vfs) },
@@ -427,8 +341,6 @@ const genSeed = (length = 81) => {
     // check if the repo sans channel info has been uploaded already
     let cid = await cache.get(channelless.toString())
     if(!cid) {
-      vfs.channel = {...channelState}
-      delete vfs.channel.seed
       cid = await ipfs.object.patch.addLink(
         base,
         { name: '.git', cid: await ipfs.dag.put(vfs, { pin: true }) },
@@ -436,25 +348,10 @@ const genSeed = (length = 81) => {
       )
       await cache.put(channelless.toString(), cid.toString())
       // alters channelState adding nextRoot
-      console.debug(channelState)
       console.debug(cid.toString())
-      const mamMessage = createMessage(channelState, asciiToTrytes(cid.toString()))
-      await mamAttach(IOTA, mamMessage, depth, minWeightMagnitude, tag);
     }
 
-    if(newMAMChannel) {
-      console.debug(`Announcing Repo to: ${vfs.announceAddr}`)
-      const trytes = asciiToTrytes(cid.toString())
-      const transfers = [{
-        value: 0,
-        address: vfs.announceAddr,
-        message: trytes
-      }]
-      const prepared = await IOTA.prepareTransfers(config.seed, transfers)
-      const transactions = await IOTA.sendTrytes(prepared, depth, minWeightMagnitude)
-    }
-
-    process.stderr.write(`igis::${cid.toString()}\n`)
+    process.stderr.write(`\x1b[34mipfs::\x1b[34;1m${cid.toString()}\x1b[39m\n`)
   }
 
   const rl = readline.createInterface({
