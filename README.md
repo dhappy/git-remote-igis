@@ -1,6 +1,6 @@
 # Interplanetary Filesystem (IPFS) Git Remote Helper
 
-Push and fetch commits to IPFS. To use the IOTA tangle to distribute the most recent version of a repo, see 
+Push and fetch commits to IPFS. To use the IOTA tangle to distribute the most recent version of a repo, see [git-remote-ipfs+mam](https://github.com/dhappy/git-remote-ipfs-mam).
 
 ## Installation
 
@@ -14,6 +14,8 @@ Push and fetch commits to IPFS. To use the IOTA tangle to distribute the most re
 2. `git push ipfs::<CID from Step #1> --all`
 3. Pin the resultant hash on a pinning service.
 
+_Note that #2 uses the CID produced by #1. When a CID is provided for a push the push will add changes to that repository._
+
 #### Push `master` with tags and get an IPFS CID back:
 
 `git push --tags ipfs:: master`
@@ -26,10 +28,9 @@ Push and fetch commits to IPFS. To use the IOTA tangle to distribute the most re
 
 `git clone ipfs::Qma5iwyvJqxzHqCT9aqyc7dxZXXGoDeSUyPYFqkCWGJw92 repo`
 
-#### See debugging info:
+#### Create a repo named "myproject" and show debugging info:
 
-`IGIS_DEBUG=t git push ipfs::`
-
+`DEBUG=t git push ipfs://myproject`
 
 ## Generated File Structure
 
