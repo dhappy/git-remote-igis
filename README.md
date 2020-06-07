@@ -37,7 +37,7 @@ _Note that #2 uses the CID produced by #1. When a CID is provided for a push the
 * `/`: the contents of the branch that was pushed
 * `.git/`: CBOR-DAG representing a git repository
 * `.git/HEAD`: string entry denoting the current default branch
-* `.git/channel`: The MAM channel state
+* `.git/uuid`: UUIDv1 identifier that stays constant across pushes
 * `.git/refs/(heads|tags)/*`: Pointers to commit objects
 
 Each commit then has:
