@@ -1,7 +1,7 @@
 {
   "name": "git-remote-ipfs",
-  "version": "0.3.21",
-  "description": "Git remote that interacts with the IPFS ecosystem",
+  "version": "0.3.22",
+  "description": "Git remote that decomposes objects to and from IPFS.",
   "bin": "git-remote-ipfs",
   "main": "index.js",
   "scripts": {

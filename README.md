@@ -4,17 +4,18 @@ Push and fetch commits to IPFS. To use the IOTA tangle to distribute the most re
 
 ## Installation
 
-`npm install --global git-remote-ipfs`
+1. Install [ipfs-desktop](//github.com/ipfs-shipyard/ipfs-desktop#install) or another IPFS daemon
+2. `npm install --global git-remote-ipfs`
 
 ## Usage
 
 #### (Insecure) Cloud Backup
 
-1. `git push ipfs:: --tags # you can't push all and tags at the same time`
+1. `git push ipfs://projectname --tags # you can't push all and tags at the same time`
 2. `git push ipfs::<CID from Step #1> --all`
 3. Pin the resultant hash on a pinning service.
 
-_Note that #2 uses the CID produced by #1. When a CID is provided for a push the push will add changes to that repository._
+_Note that #2 uses the CID produced by #1. When a CID is provided for a push the push will add changes to that repository maintaining some information such as the name and uuid._
 
 #### Push `master` with tags and get an IPFS CID back:
 
@@ -32,6 +33,10 @@ _Note that #2 uses the CID produced by #1. When a CID is provided for a push the
 
 `DEBUG=t git push ipfs://myproject`
 
+## Overview
+
+This remote serializes a Git commit tree to a CBOR-DAG stored in IPFS. The root of the generated filesystem is the branch that was last pushed.
+
 ## Generated File Structure
 
 * `/`: the contents of the branch that was pushed
@@ -44,13 +49,9 @@ Each commit then has:
 
 * `parents`: The commit's parent commits
 * `(author|committer)`: The commits author and committer signatures
-* `gpgsig`: Optional signature from the initial commit
+* `gpgsig`: Optional signature for the commit
 * `tree`: The filesystem state at the time of this commit
 * `modes`: `tree` is an IPFS Protobuffer-UnixFS DAG which is browsable through the web, but can't store the file mode information, so this is that info.
-
-## Overview
-
-This remote serializes a Git commit tree to a CBOR-DAG stored in IPFS.
 
 ### IPLD Git Remote
 
@@ -62,7 +63,7 @@ Because the IPLD remote stores the raw Git blocks, the file data is fully presen
 
 ## Troubleshooting
 
-It is safe to delete `.git/remote-igis/cache/`. If you remove `.git/remote-igis/config.json` you remove the key used to write to the MAM chain and you'll have to start a new one. People following your previous chain wouldn't be able to find updates.
+It is safe to delete `.git/remote-igis/cache/` though it will require regenerating all the commits which could take some time.
 
 # License
-MIT
+[MIT](LISENCE)
