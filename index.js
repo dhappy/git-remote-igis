@@ -101,9 +101,9 @@ module.exports = class {
   }
 
   async fetchTree(root, modesCID) {
-    DEBUG && console.debug('treeFor()', root.toString())
+    DEBUG && console.debug('fetchTree()', root.toString())
     const list = await all(this.ipfs.ls(root.toString()))
-    const tb = await Git.Treebuilder.create(repo, null)
+    const tb = await Git.Treebuilder.create(this.repo, null)
     const modes = (await this.ipfs.dag.get(modesCID)).value
 
     await Promise.all(list.map(async ({ name, cid, type }) => {
@@ -130,7 +130,7 @@ module.exports = class {
   }
 
   async fetchTag(cid) {
-    DEBUG && console.debug('tagFor()', cid)
+    DEBUG && console.debug('fetchTag()', cid)
     const root = (await this.ipfs.dag.get(cid)).value
     const {
       name, type, commit: commitCID, message, taggerSig
@@ -144,16 +144,16 @@ module.exports = class {
   }
 
   async fetchCommit(cid) {
-    DEBUG && console.debug('commitFor()', cid)
+    DEBUG && console.debug('fetchCommit()', cid)
     const root = (await this.ipfs.dag.get(cid)).value
     const {
       authorSig, committerSig, encoding, message, oid,
       tree:treeCID, modes, parents:parentCIDs, signature,
     } = root
     const treeOID = await this.fetchTree(treeCID, modes)
-    const tree = await Git.Tree.lookup(repo, treeOID)
+    const tree = await Git.Tree.lookup(this.repo, treeOID)
     const parents = await Promise.all(parentCIDs.map(
-      async c => await Git.Commit.lookup(repo, await this.fetchCommit(c))
+      async c => await Git.Commit.lookup(this.repo, await this.fetchCommit(c))
     ))
     const parent_count = parents.length
     const author = Git.Signature.create(authorSig.name, authorSig.email, authorSig.time, authorSig.offset)
@@ -162,15 +162,15 @@ module.exports = class {
     let commit
     if(signature) {
       const buffer = await Git.Commit.createBuffer(
-        repo, author, committer, encoding, message, tree, parent_count, parents
+        this.repo, author, committer, encoding, message, tree, parent_count, parents
       )
       commit = await Git.Commit.createWithSignature(this.repo, buffer.toString(), signature, 'gpgsig')
     } else {
       const buffer = await Git.Commit.createBuffer(
-        repo, author, committer, encoding, message, tree, parent_count, parents
+        this.repo, author, committer, encoding, message, tree, parent_count, parents
       )
       commit = await Git.Commit.create(
-        repo, null, author, committer, encoding, message, tree, parent_count, parents
+        this.repo, null, author, committer, encoding, message, tree, parent_count, parents
       )
     }
     process.stderr.write(`Commit: ${commit}/${oid} (${cid})\n`)
@@ -179,7 +179,7 @@ module.exports = class {
   }
 
   async pushTree(tree, base = EMPTY_REPO_CID) {
-    DEBUG && console.debug('addTree()', tree.id().toString())
+    DEBUG && console.debug('pushTree()', tree.id().toString())
     var modes = {}
     for(const e of (await tree.entries())) {
       let cid = await this.cache.get(e.oid())
@@ -219,7 +219,7 @@ module.exports = class {
   }
 
   async pushCommit(oid) {
-    DEBUG && console.debug('addCommit()', oid.toString())
+    DEBUG && console.debug('pushCommit()', oid.toString())
     process.stderr.write(`mit:${oid}: `)
     let cid = await this.cache.get(oid)
     if(cid) {
@@ -250,6 +250,7 @@ module.exports = class {
   }
 
   async pushTag(oid, name) {
+    DEBUG && console.debug('pushTag()', oid.toString())
     let obj
     try {
       process.stderr.write(`tag:${oid}: `)
@@ -259,11 +260,12 @@ module.exports = class {
       obj = {
         commit: commit, taggerSig: this.objForSig(tag.tagger()),
         name: name, message: tag.message(), type: 'annotated',
+        oid: oid,
       }
     } catch(err) { // Lightweight tags return a commit instead of a tag
       const commit = await this.pushCommit(oid)
       obj = {
-        name: name, commit: commit, type: 'lightweight',
+        name: name, commit: commit, type: 'lightweight', oid: oid,
       }
     }
     return await this.ipfs.dag.put(obj, { pin: true })
