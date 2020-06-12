@@ -7,7 +7,7 @@
  * https://git-scm.com/docs/gitremote-helpers#_invocation
  */
 if(process.argv.length < 2) {
-  console.error('Usage: git-remote-igis remote-name url')
+  console.error('Usage: git-remote-ipfs remote-name url')
   process.exit(-10)
 }
 
@@ -24,12 +24,12 @@ const DEBUG = !!process.env.DEBUG
 const console = new Console(process.stderr)
 
 module.exports = class {
-  constructor({ ipfs, cache, repo, url }) {
+  constructor({ ipfs, cache, repo, url, meta = {} }) {
     this.ipfs = ipfs
     this.repo = repo
     this.cache = cache
     this.url = url
-    this.vfs = {}
+    this.vfs = meta
 
     this.oidMgr = {
       resolvers: {},
@@ -54,16 +54,20 @@ module.exports = class {
   }
 
   async create() {
-    if(this.url.startsWith('ipfs://')) {
-      const name = this.url.replace(/^ipfs:\/\//, '')
-      if(name) {
-        this.vfs.name = name
+    if(this.url) {
+      if(this.url.startsWith('ipfs://')) {
+        const name = this.url.replace(/^ipfs:\/\//, '')
+        if(name) {
+          this.vfs.name = name
+        }
+      } else if(this.url.length > 0) {
+        this.vfs = Object.assign(
+          (await this.ipfs.dag.get(`${this.url}/.git/`)).value, this.vfs
+        )
+        DEBUG && console.debug('Continuing:', this.url)
       }
-    } else if(this.url.length > 0) {
-      this.vfs = (await this.ipfs.dag.get(`${this.url}/.git/`)).value
-      DEBUG && console.debug('Continuing:', this.url)
     }
-
+    
     this.odb = await this.repo.odb()
 
     return this

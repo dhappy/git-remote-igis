@@ -23,8 +23,6 @@ const fs = require('fs')
 const DEBUG = !!process.env.DEBUG
 const console = new Console(process.stderr)
 
-console.debug(IPFSRemote)
-
 if(!process.env.GIT_DIR) {
   process.stderr.write('$GIT_DIR must be defined')
   process.exit(-9)
@@ -33,7 +31,7 @@ if(!process.env.GIT_DIR) {
 ;(async () => {
   const repo = await Git.Repository.open(process.env.GIT_DIR)
   const ipfs = IPFSProxy()
-  const dataDir = `${process.env.GIT_DIR}/remote-igis`
+  const dataDir = `${process.env.GIT_DIR}/remote-ipfs`
   fs.mkdirSync(dataDir, { recursive: true })
   const cacheDir = `${dataDir}/cache`
   const cacheDB = levelup(leveldown(cacheDir))  
