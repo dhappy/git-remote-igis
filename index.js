@@ -1,10 +1,17 @@
 #!/usr/bin/env node
 
 /**
- * Remote helper programs are invoked with one or (optionally) two arguments.
- * The first argument specifies a remote repository as in Git; it is either the name of a configured remote or a URL.
- * The second argument specifies a URL; it is usually of the form <transport>://<address>.
- * https://git-scm.com/docs/gitremote-helpers#_invocation
+ * This is the bulk of the processing logic for the IPFS git remote. The executable is
+ * a driver for this code. The separation is to allow other drivers such as the
+ * ipfs+mam driver which uses IOTA to track updates to the repository.
+ */
+
+/**
+ * "Remote helper programs are invoked with one or (optionally) two arguments. The first
+ *  argument specifies a remote repository as in Git; it is either the name of a
+ *  configured remote or a URL. The second argument specifies a URL; it is usually of
+ *  the form <transport>://<address>."
+ *                             – https://git-scm.com/docs/gitremote-helpers#_invocation
  */
 if(process.argv.length < 2) {
   console.error('Usage: git-remote-ipfs remote-name url')
@@ -31,6 +38,12 @@ module.exports = class {
     this.url = url
     this.vfs = meta
 
+    /**
+     * When pushing a commit, a merge can cause the same object
+     * id to be processed multiple times. This class does a lookup
+     * for the first occurrence and defers subsequent requests
+     * until the first occurrence returns.
+     */
     this.oidMgr = {
       resolvers: {},
       convert: (oid) => {
@@ -51,8 +64,46 @@ module.exports = class {
         }
       }
     }
+
+    /**
+     * The same functionality as oidMgr, but for content ids to
+     * be used in fetching.
+     */
+    this.cidMgr = {
+      resolvers: {},
+      convert: (cid) => {
+        if(!this.cidMgr.resolvers[cid]) { // new
+          this.fetchCommit(cid)
+          this.cidMgr.resolvers[cid] = []
+        }
+        const promise = new Promise(async (res, rej) => {
+          const oid = await this.cache.get(cid)
+          if(oid) {
+            res.call(this, Git.Oid.fromString(oid.toString()))
+          } else {
+            this.cidMgr.resolvers[cid].push(res)
+          }
+        })
+        return promise
+      },
+      oidFound: (cid, oid) => {
+        this.cache.put(cid, oid)
+        .then(() => {
+          if(this.cidMgr.resolvers[cid]) {
+            oid = Git.Oid.fromString(oid.toString())
+            while(this.cidMgr.resolvers[cid].length > 0) {
+              this.cidMgr.resolvers[cid].pop().call(this, oid)
+            }
+          }
+        })
+      }
+    }
   }
 
+  /**
+   * Setup function to handle asynchronous setup operations not
+   * permitted in the constructor.
+   */
   async create() {
     if(this.url) {
       if(this.url.startsWith('ipfs://')) {
@@ -73,6 +124,11 @@ module.exports = class {
     return this
   }
 
+  /**
+   * Create an object representing a signature from nodegit.
+   *
+   * @param sig: the nodegit signature
+   */
   objForSig(sig) {
     return {
       name: sig.name(), email: sig.email(),
@@ -80,6 +136,18 @@ module.exports = class {
     }
   }
 
+  /**
+   * Create a nodegit signature for an object returned from `objForSig`.
+   */
+  sigForObj(obj) {
+    return Git.Signature.create(obj.name, obj.email, obj.time, obj.offset)
+  }
+
+  /**
+   * Is the given object id present in the object database?
+   *
+   * @param oid: object id to check
+   */
   async oidInODB(oid) {
     try {
       return await this.odb.existsPrefix(oid, oid.length)
@@ -88,6 +156,13 @@ module.exports = class {
     }
   }
 
+  /**
+   * Create a listing of reference values for the `.git/refs` entry of
+   * the repository for the `list` command of git.
+   *
+   * @param root: the base object to traverse looking for commits
+   * @param path: the current path from the root – expanded as the object is traversed
+   */
   async serializeRefs(root, path = 'refs') {
     await Promise.all(Object.entries(root).map(async ([name, obj]) => {
       if(obj instanceof IPFSProxy.CID || obj.codec == 'dag-cbor') {
@@ -100,6 +175,13 @@ module.exports = class {
     }))
   }
 
+  /**
+   * Retrieve the given UnixFS-Protobuf tree to the git object
+   * database using the DAG at `modesCID` for the file modes.
+   *
+   * @param root: the IPFS CID of the filesystem
+   * @param modesCID: the CID of a CBOR-DAG with the file mode information
+   */
   async fetchTree(root, modesCID) {
     DEBUG && console.debug('fetchTree()', root.toString())
     const list = await all(this.ipfs.ls(root.toString()))
@@ -126,23 +208,59 @@ module.exports = class {
     }))
     .catch(console.error)
 
-    return tb.write()
+    const oid = await tb.write()
+    return oid
   }
 
+  /**
+   * Retrieve a tag from IPFS and write it (and the associated commit tree)
+   * to the git object database.
+   *
+   * @param cid: IPFS content id of the tag object
+   */
   async fetchTag(cid) {
     DEBUG && console.debug('fetchTag()', cid)
     const root = (await this.ipfs.dag.get(cid)).value
     const {
-      name, type, commit: commitCID, message, taggerSig
+      name, type, commit: commitCID, message, taggerSig, signature,
     } = root
-    const commit = await this.fetchCommit(commitCID)
+    const commit = await this.cidMgr.convert(commitCID)
+    const force = true ? 1 : 0
+    let tag
     if(type === 'annotated') {
-      return await this.repo.createTag(commit.oid, name, message)
+      const tagger = this.sigForObj(taggerSig)
+      if(signature) {
+        console.debug(`Creating w/ sig: ${name} (${commit})`)
+        const sign = (tag) => ({
+          code: Git.Error.CODE.OK,
+          signedData: signature,
+        })
+        tag = await Git.Tag.createWithSignature(
+          this.repo, name, commit, tagger, message, force, sign
+        )
+      } else {
+        console.debug(`Creating w/o sig: ${name}`)
+        tag = await Git.Tag.create(
+          this.repo, name, commit, tagger, message, force
+        )
+      }
     } else {
-      return await this.repo.createLightweightTag(commit.oid, name)
+      console.debug(`Creating lightweight: ${name}`)
+      tag = await Git.Tag.createLightweight(
+        this.repo, name, commit, force
+      )
     }
+    DEBUG && console.debug(`TAG: ${tag}`)
+    return tag
   }
 
+  /**
+   * Retrieve a commit (and its parents, and their parents…) from IPFS
+   * and insert them and their associated trees into the git object
+   * database.
+   *
+   * @param cid: the IPSF content id of the commit CBOR-DAG
+   */
   async fetchCommit(cid) {
     DEBUG && console.debug('fetchCommit()', cid)
     const root = (await this.ipfs.dag.get(cid)).value
@@ -153,11 +271,15 @@ module.exports = class {
     const treeOID = await this.fetchTree(treeCID, modes)
     const tree = await Git.Tree.lookup(this.repo, treeOID)
     const parents = await Promise.all(parentCIDs.map(
-      async c => await Git.Commit.lookup(this.repo, await this.fetchCommit(c))
+      async c => {
+        const oid = await this.cidMgr.convert(c)
+        const commit = await Git.Commit.lookup(this.repo, oid)
+        return commit
+      }
     ))
     const parent_count = parents.length
-    const author = Git.Signature.create(authorSig.name, authorSig.email, authorSig.time, authorSig.offset)
-    const committer = Git.Signature.create(committerSig.name, committerSig.email, committerSig.time, committerSig.offset)
+    const author = this.sigForObj(authorSig)
+    const committer = this.sigForObj(committerSig)
 
     let commit
     if(signature) {
@@ -166,18 +288,24 @@ module.exports = class {
       )
       commit = await Git.Commit.createWithSignature(this.repo, buffer.toString(), signature, 'gpgsig')
     } else {
-      const buffer = await Git.Commit.createBuffer(
-        this.repo, author, committer, encoding, message, tree, parent_count, parents
-      )
       commit = await Git.Commit.create(
         this.repo, null, author, committer, encoding, message, tree, parent_count, parents
       )
     }
     process.stderr.write(`Commit: ${commit}/${oid} (${cid})\n`)
     process.stderr.write(`Tree OID: ${treeOID} (${treeCID})\n`)
+    this.cidMgr.oidFound(cid, oid)
     return commit
   }
 
+  /**
+   * Insert a nodegit tree into IPFS as a UnixFS-Protobuf and nested CBOR-DAG
+   * with the file mode information. Both are returned: [filesystemCID, modesCID]
+   *
+   * @param tree: nodegit tree to insert
+   * @param base: IPFS CID to build filesystem off of. By default this is an
+   *               empty directory tree.
+   */
   async pushTree(tree, base = EMPTY_REPO_CID) {
     DEBUG && console.debug('pushTree()', tree.id().toString())
     var modes = {}
@@ -185,8 +313,9 @@ module.exports = class {
       let cid = await this.cache.get(e.oid())
       if(e.isTree()) {
         let childModes = await this.cache.get(`modes:${e.oid()}`)
-        if(childModes) childModes = new IPFSProxy.CID(childModes.toString())
-        DEBUG && console.debug('addTree() recursing', childModes)
+        if(childModes) {
+          childModes = new IPFSProxy.CID(childModes.toString())
+        }
         if(!cid || !childModes) {
           DEBUG && console.debug('Cache Miss', e.oid().toString())
           ;[cid, childModes] = await this.pushTree(await e.getTree())
@@ -253,19 +382,37 @@ module.exports = class {
     DEBUG && console.debug('pushTag()', oid.toString())
     let obj
     try {
-      process.stderr.write(`tag:${oid}: `)
       const tag = await Git.Tag.lookup(this.repo, oid)
+      process.stderr.write(`tag:${oid}: `)
       const commit = await this.pushCommit(tag.targetId())
+
+      let message = tag.message(), signature
+      const lines = message.split(/\r?\n/)
+      const startIdx = lines.findIndex(
+        (l) => l === '-----BEGIN PGP SIGNATURE-----'
+      )
+      if(startIdx >= 0) {
+        message = lines.slice(0, startIdx).join("\n")
+        signature = lines.slice(startIdx).join("\n")
+      }
 
       obj = {
         commit: commit, taggerSig: this.objForSig(tag.tagger()),
-        name: name, message: tag.message(), type: 'annotated',
-        oid: oid,
+        name: name, message: message, type: 'annotated',
+        oid: oid.toString(),
+      }
+
+      if(signature) {
+        obj.signature = signature
       }
     } catch(err) { // Lightweight tags return a commit instead of a tag
-      const commit = await this.pushCommit(oid)
-      obj = {
-        name: name, commit: commit, type: 'lightweight', oid: oid,
+      if(err.errno === -3 && err.errorFunction === 'Tag.lookup') {
+        const commit = await this.pushCommit(oid)
+        obj = {
+          name: name, commit: commit, type: 'lightweight', oid: oid.toString(),
+        }
+      } else {
+        throw err
       }
     }
     return await this.ipfs.dag.put(obj, { pin: true })
@@ -282,9 +429,19 @@ module.exports = class {
           await this.repo.createBranch(ref.replace(/^refs\/heads\//, ''), commit)
           console.debug(`Created Branch: ${ref.replace(/^refs\/heads\//, '')}`)
         }
-      } catch(err) { /* exists */}
+      } catch(err) {
+        if(err.errno === -4 && err.errorFunction === 'Branch.create') {
+          // branch already exists
+        } else {
+          console.error(err)
+        }
+      }
     }
-    await this.repo.setHead((await this.ipfs.dag.get(`${process.argv[3]}/.git/HEAD`)).value)
+    const refs = await this.repo.getReferences()
+    console.debug(refs)
+    const HEAD = (await this.ipfs.dag.get(`${process.argv[3]}/.git/HEAD`)).value
+    DEBUG && console.debug(`Setting HEAD: ${HEAD}`)
+    await this.repo.setHead(`${HEAD}`)
   }
 
   async doPush(pushRefs) {
@@ -330,7 +487,7 @@ module.exports = class {
       { name: '.git', cid: await this.ipfs.dag.put(this.vfs, { pin: true }) },
       { create: true, pin: true }
     )
-    console.debug(cid.toString())
+    await this.ipfs.pin.add(cid)
 
     return cid
   }
