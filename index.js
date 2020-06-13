@@ -286,7 +286,9 @@ module.exports = class {
       const buffer = await Git.Commit.createBuffer(
         this.repo, author, committer, encoding, message, tree, parent_count, parents
       )
-      commit = await Git.Commit.createWithSignature(this.repo, buffer.toString(), signature, 'gpgsig')
+      commit = await Git.Commit.createWithSignature(
+        this.repo, buffer.toString(), signature, 'gpgsig'
+      )
     } else {
       commit = await Git.Commit.create(
         this.repo, null, author, committer, encoding, message, tree, parent_count, parents
@@ -438,7 +440,7 @@ module.exports = class {
       }
     }
     const refs = await this.repo.getReferences()
-    console.debug(refs)
+    console.debug(refs.map(r => r.toString()))
     const HEAD = (await this.ipfs.dag.get(`${process.argv[3]}/.git/HEAD`)).value
     DEBUG && console.debug(`Setting HEAD: ${HEAD}`)
     await this.repo.setHead(`${HEAD}`)
