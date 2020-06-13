@@ -2,11 +2,11 @@
 
 Push and fetch commits to IPFS. To use the IOTA tangle to distribute the most recent version of a repo, see [git-remote-ipfs+mam](https://github.com/dhappy/git-remote-ipfs-mam).
 
-## 🐞 Bug 🐞 
+## 🐞 Bug 🐞
 
 It is possible to push tags to IPFS, but when cloning a repo that contains tags you'll get the error: `fatal: BUG: initial ref transaction called with existing refs`.
 
-The issue is known and being investigated currently.
+The issue is known and is [being investigated](//stackoverflow.com/q/62360443/264008).
 
 ## Installation
 
@@ -21,7 +21,7 @@ The issue is known and being investigated currently.
 2. `git push ipfs::<CID from Step #1> --tags master # the pushed branch becomes the root of the filesystem`
 3. Pin the resultant hash on a pinning service.
 
-_Note that #2 uses the CID produced by #1. When a CID is provided for a push the push will add changes to that repository maintaining some information such as the name and uuid._
+_Note that #2 uses the CID produced by #1. When a CID is provided for a push, the push will add changes to that repository maintaining some information such as the name and uuid._
 
 #### Push `master` with tags and get an IPFS CID back:
 

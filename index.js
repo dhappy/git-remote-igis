@@ -230,7 +230,7 @@ module.exports = class {
     if(type === 'annotated') {
       const tagger = this.sigForObj(taggerSig)
       if(signature) {
-        console.debug(`Creating w/ sig: ${name} (${commit})`)
+        DEBUG && console.debug(`Creating w/ sig: ${name} (${commit})`)
         const sign = (tag) => ({
           code: Git.Error.CODE.OK,
           signedData: signature,
@@ -239,15 +239,16 @@ module.exports = class {
           this.repo, name, commit, tagger, message, force, sign
         )
       } else {
-        console.debug(`Creating w/o sig: ${name}`)
+        DEBUG && console.debug(`Creating w/o sig: ${name}`)
         tag = await Git.Tag.create(
           this.repo, name, commit, tagger, message, force
         )
       }
     } else {
-      console.debug(`Creating lightweight: ${name}`)
+      DEBUG && console.debug(`Creating lightweight: ${name} (${commit})`)
+      const commitObj = await Git.Commit.lookup(this.repo, commit)
       tag = await Git.Tag.createLightweight(
-        this.repo, name, commit, force
+        this.repo, name, commitObj, force
       )
     }
     DEBUG && console.debug(`TAG: ${tag}`)

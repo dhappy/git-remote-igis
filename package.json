@@ -1,6 +1,6 @@
 {
   "name": "git-remote-ipfs",
-  "version": "0.3.22",
+  "version": "0.3.23",
   "description": "Git remote that decomposes objects to and from IPFS.",
   "bin": "git-remote-ipfs",
   "main": "index.js",
