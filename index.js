@@ -441,10 +441,17 @@ module.exports = class {
       }
     }
     const refs = await this.repo.getReferences()
-    console.debug(refs.map(r => r.toString()))
+    for(const ref of refs) {
+      // git complains and dies if any tag references exist post-clone
+      if(ref.toString().startsWith('refs/tags/')) {
+        Git.Reference.remove(this.repo, ref.toString())
+      }
+    }
     const HEAD = (await this.ipfs.dag.get(`${process.argv[3]}/.git/HEAD`)).value
-    DEBUG && console.debug(`Setting HEAD: ${HEAD}`)
-    await this.repo.setHead(`${HEAD}`)
+    if(HEAD.startsWith('refs/heads/')) {
+      DEBUG && console.debug(`Setting HEAD: ${HEAD}`)
+      await this.repo.setHead(`${HEAD}`)
+    }
   }
 
   async doPush(pushRefs) {
